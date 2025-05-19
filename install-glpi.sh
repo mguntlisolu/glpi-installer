@@ -1,30 +1,28 @@
 #!/bin/bash
 
-echo "=== GLPI Installer mit PHP 8.3 ==="
+echo "GLPI Installer with PHP 8.3 (secure setup)"
 
-# 1. Benutzereingaben erfassen
-read -p "Gib den MySQL-Benutzernamen für GLPI ein: " DB_USER
-read -s -p "Gib das MySQL-Passwort für $DB_USER ein: " DB_PASS
+# Prompt for credentials and domain
+read -p "Enter the MySQL username for GLPI: " DB_USER
+read -s -p "Enter the MySQL password for $DB_USER: " DB_PASS
 echo ""
-read -p "Gib den Domainnamen ein (z.B. glpi.example.com): " DOMAIN
+read -p "Enter the domain name (e.g. glpi.example.com): " DOMAIN
 
-# 2. System aktualisieren
-echo "→ System wird aktualisiert..."
+# Update system
 sudo apt update && sudo apt upgrade -y
 
-# 3. PHP 8.3 installieren (über PPA falls nötig)
-echo "→ PHP 8.3 und Apache installieren..."
+# Add PHP 8.3 repository
 sudo add-apt-repository ppa:ondrej/php -y
 sudo apt update
 
+# Install required packages
 sudo apt install -y apache2 mysql-server unzip wget \
 php8.3 php8.3-cli php8.3-common php8.3-mysql php8.3-curl php8.3-gd \
 php8.3-intl php8.3-xml php8.3-mbstring php8.3-zip php8.3-bz2 \
-php8.3-pspell php8.3-tidy php8.3-imap php8.3-xsl php8.3-ldap \
-php8.3-imagick php-apcu php-cas php-pear libapache2-mod-php8.3
+php8.3-pspell php8.3-tidy php8.3-imap php8.3-xsl php8.3-ldap php8.3-imagick \
+php-apcu php-cas php-pear libapache2-mod-php8.3
 
-# 4. Datenbank einrichten
-echo "→ MySQL-Datenbank und Benutzer einrichten..."
+# Create GLPI database and user
 sudo mysql <<EOF
 CREATE DATABASE glpidb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -32,21 +30,29 @@ GRANT ALL PRIVILEGES ON glpidb.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# 5. GLPI herunterladen
-echo "→ GLPI herunterladen..."
+# Download and extract GLPI
 cd /tmp/
 wget https://github.com/glpi-project/glpi/releases/download/10.0.14/glpi-10.0.14.tgz
 tar -xvzf glpi-10.0.14.tgz
 sudo mv glpi /var/www/html/
 
-# 6. Rechte setzen
-echo "→ Dateirechte setzen..."
-sudo chown -R www-data:www-data /var/www/html/glpi
-sudo find /var/www/html/glpi -type d -exec chmod 755 {} \;
-sudo find /var/www/html/glpi -type f -exec chmod 644 {} \;
+# Create a secure data directory outside the web root
+sudo mkdir -p /var/lib/glpi-files
+sudo chown -R www-data:www-data /var/lib/glpi-files
 
-# 7. Apache vHost erstellen
-echo "→ Apache-Konfiguration erstellen..."
+# Move GLPI to separate directory and use /public as web root
+sudo mv /var/www/html/glpi /var/www/html/glpi-full
+sudo ln -s /var/www/html/glpi-full/public /var/www/html/glpi
+
+# Adjust GLPI_VAR_DIR in define.php
+sudo sed -i "s|define('GLPI_VAR_DIR'.*|define('GLPI_VAR_DIR', '/var/lib/glpi-files');|" /var/www/html/glpi-full/inc/define.php
+
+# Set permissions
+sudo chown -R www-data:www-data /var/www/html/glpi-full
+sudo find /var/www/html/glpi-full -type d -exec chmod 755 {} \;
+sudo find /var/www/html/glpi-full -type f -exec chmod 644 {} \;
+
+# Create Apache virtual host for GLPI
 sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 <VirtualHost *:80>
     ServerAdmin admin@$DOMAIN
@@ -64,21 +70,21 @@ sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 </VirtualHost>
 EOF"
 
-# 8. Apache aktivieren
-echo "→ Apache aktivieren und neustarten..."
-sudo a2ensite glpi
-sudo a2enmod rewrite
-sudo systemctl reload apache2
-
-# 9. Optional: HTTPS via Certbot
-read -p "Möchtest du HTTPS mit Let's Encrypt aktivieren (j/n)? " SSL_CHOICE
-if [[ "$SSL_CHOICE" == "j" || "$SSL_CHOICE" == "J" ]]; then
-    echo "→ Certbot installieren und konfigurieren..."
-    sudo apt install -y certbot python3-certbot-apache
-    sudo certbot --apache -d $DOMAIN
+# Add ServerName globally to suppress Apache warning
+if ! grep -q "^ServerName" /etc/apache2/apache2.conf; then
+    echo "ServerName $DOMAIN" | sudo tee -a /etc/apache2/apache2.conf
 fi
 
-# 10. Fertig
+# Enable security option for PHP sessions
+sudo sed -i "s/^;*session.cookie_httponly.*/session.cookie_httponly = On/" /etc/php/8.3/apache2/php.ini
+
+# Enable site and necessary modules
+sudo a2ensite glpi
+sudo a2enmod rewrite
+sudo systemctl restart apache2
+
+# Final message
 echo ""
-echo "✅ GLPI wurde erfolgreich installiert!"
-echo "Rufe http://$DOMAIN in deinem Browser auf, um die Einrichtung abzuschließen."
+echo "GLPI has been installed and configured."
+echo "Access it at: http://$DOMAIN"
+echo "Complete the setup through the web interface."
