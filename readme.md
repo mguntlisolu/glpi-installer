@@ -17,9 +17,4 @@ This is a secure and production-ready Bash script that installs GLPI (version 10
 
 ## Usage
 
-Download and run the script:
-
-```bash
-wget https://raw.githubusercontent.com/<your-username>/<repo-name>/main/install-glpi.sh
-chmod +x install-glpi.sh
-./install-glpi.sh
+Download and run the script with bash
