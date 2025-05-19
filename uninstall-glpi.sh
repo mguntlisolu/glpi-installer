@@ -1,49 +1,55 @@
 #!/bin/bash
 
-echo "Full GLPI environment cleanup - including Apache, MySQL, PHP and configs"
+echo "Full GLPI, MySQL, Apache site and data cleanup"
 
 read -p "Enter the MySQL username to remove (e.g. glpiuser): " DB_USER
 
-# 1. Stop services
-sudo systemctl stop apache2 mysql
+# Stop MySQL
+echo "Stopping MySQL service"
+sudo systemctl stop mysql
 
-# 2. Remove Apache GLPI site
-sudo a2dissite glpi.conf 2>/dev/null
-sudo rm -f /etc/apache2/sites-available/glpi.conf
+# Purge MySQL packages
+echo "Removing MySQL packages"
+sudo apt purge --remove mysql-server mysql-client mysql-common -y
+sudo apt autoremove -y
+sudo apt autoclean
 
-# 3. Clean web root
-sudo rm -rf /var/www/html/*
+# Delete MySQL files and logs
+echo "Deleting MySQL config and data directories"
+sudo rm -rf /etc/mysql /var/lib/mysql
+sudo rm -rf /var/log/mysql*
 
-# 4. Remove GLPI data outside web root
-sudo rm -rf /var/lib/glpi-data
+# Remove MySQL system user and group
+echo "Removing MySQL system user and group (if they exist)"
+sudo deluser mysql 2>/dev/null
+sudo delgroup mysql 2>/dev/null
 
-# 5. Drop database and user
+# Drop database and user if anything remains
+echo "Dropping database glpidb and user $DB_USER (if still present)"
 sudo mysql <<EOF
 DROP DATABASE IF EXISTS glpidb;
 DROP USER IF EXISTS '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# 6. Remove ServerName from apache2.conf
-sudo sed -i '/^ServerName .*/d' /etc/apache2/apache2.conf
+# Remove GLPI web directory
+echo "Removing GLPI web files"
+sudo rm -rf /var/www/html/glpi
+sudo rm -rf /var/www/html/*
 
-# 7. Full MySQL cleanup
-sudo apt purge --remove mysql-server mysql-client mysql-common -y
-sudo rm -rf /etc/mysql /var/lib/mysql /var/log/mysql*
+# Remove GLPI data directory outside webroot
+echo "Removing GLPI external data (if exists)"
+sudo rm -rf /var/lib/glpi-data
 
-# 8. Full PHP cleanup (only PHP 8.3 here)
-sudo apt purge --remove php8.3* libapache2-mod-php8.3 php-pear -y
-sudo rm -rf /etc/php
-
-# 9. Optional: Clean Apache configs (keep Apache installed)
-sudo rm -f /etc/apache2/sites-enabled/glpi.conf
+# Remove Apache vhost configuration
+echo "Disabling and removing Apache GLPI site"
+sudo a2dissite glpi.conf 2>/dev/null
 sudo rm -f /etc/apache2/sites-available/glpi.conf
+sudo systemctl reload apache2
 
-# 10. Clean up unused packages
-sudo apt autoremove -y
-sudo apt autoclean
+# Optional: remove ServerName directive from apache2.conf
+echo "Cleaning up global ServerName from apache2.conf"
+sudo sed -i '/^ServerName .*/d' /etc/apache2/apache2.conf
+sudo systemctl restart apache2
 
-# 11. Restart Apache if kept
-sudo systemctl restart apache2 2>/dev/null
-
-echo "Full system cleanup complete. GLPI, MySQL and PHP have been removed"
+echo "GLPI and all related components have been removed"
