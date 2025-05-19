@@ -48,8 +48,8 @@ sudo rm -f /etc/apache2/sites-available/glpi.conf
 sudo systemctl reload apache2
 
 # Optional: remove ServerName directive from apache2.conf
-echo "Cleaning up global ServerName from apache2.conf"
-sudo sed -i '/^ServerName .*/d' /etc/apache2/apache2.conf
-sudo systemctl restart apache2
+# echo "Cleaning up global ServerName from apache2.conf"
+# sudo sed -i '/^ServerName .*/d' /etc/apache2/apache2.conf
+# sudo systemctl restart apache2
 
 echo "GLPI and all related components have been removed"
