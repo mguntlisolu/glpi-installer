@@ -1,11 +1,11 @@
 #!/bin/bash
 
-echo "GLPI Installer with PHP 8.3 - Secure root path setup"
+echo "GLPI Installer with PHP 8.3 - Clean public root setup"
 
 read -p "Enter the MySQL username for GLPI: " DB_USER
 read -s -p "Enter the MySQL password for $DB_USER: " DB_PASS
 echo ""
-read -p "Enter the domain name (for example: localhost or glpi.example.com): " DOMAIN
+read -p "Enter the domain name (e.g. localhost or inventory.example.com): " DOMAIN
 
 # System update
 sudo apt update && sudo apt upgrade -y
@@ -14,7 +14,7 @@ sudo apt update && sudo apt upgrade -y
 sudo add-apt-repository ppa:ondrej/php -y
 sudo apt update
 
-# Install Apache, MySQL, PHP and required modules
+# Install Apache, MySQL, PHP and modules
 sudo apt install -y apache2 mysql-server unzip wget \
 php8.3 php8.3-cli php8.3-common php8.3-mysql php8.3-curl php8.3-gd \
 php8.3-intl php8.3-xml php8.3-mbstring php8.3-zip php8.3-bz2 \
@@ -32,25 +32,30 @@ EOF
 # Clean web root
 sudo rm -rf /var/www/html/*
 
-# Download and extract GLPI into web root
+# Download and extract GLPI directly into web root
 cd /tmp
 wget https://github.com/glpi-project/glpi/releases/download/10.0.14/glpi-10.0.14.tgz
 tar -xvzf glpi-10.0.14.tgz
 sudo mv glpi/* /var/www/html/
 
-# Move data directory outside of web root
+# Copy default .htaccess into /public if missing
+if [ ! -f /var/www/html/public/.htaccess ]; then
+  sudo cp /var/www/html/.htaccess /var/www/html/public/.htaccess
+fi
+
+# Create secure data directory
 sudo mkdir -p /var/lib/glpi-data
 sudo chown -R www-data:www-data /var/lib/glpi-data
 
-# Update GLPI_VAR_DIR in define.php
+# Update GLPI_VAR_DIR
 sudo sed -i "s|define('GLPI_VAR_DIR'.*|define('GLPI_VAR_DIR', '/var/lib/glpi-data');|" /var/www/html/inc/define.php
 
-# Set correct permissions
+# Permissions
 sudo chown -R www-data:www-data /var/www/html
 sudo find /var/www/html -type d -exec chmod 755 {} \;
 sudo find /var/www/html -type f -exec chmod 644 {} \;
 
-# Apache VirtualHost configuration pointing to /public
+# Apache config
 sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
@@ -68,24 +73,24 @@ sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 </VirtualHost>
 EOF"
 
-# Disable default site and enable GLPI site
+# Enable site and mod_rewrite
 sudo a2dissite 000-default.conf
-sudo a2ensite glpi
+sudo a2ensite glpi.conf
 sudo a2enmod rewrite
 
-# Add global ServerName if missing
+# Add ServerName globally (if missing)
 if ! grep -q "^ServerName" /etc/apache2/apache2.conf; then
     echo "ServerName $DOMAIN" | sudo tee -a /etc/apache2/apache2.conf
 fi
 
-# Set PHP session hardening
+# Enable secure session settings
 sudo sed -i "s/^;*session.cookie_httponly.*/session.cookie_httponly = On/" /etc/php/8.3/apache2/php.ini
 
 # Restart Apache
 sudo systemctl restart apache2
 
-# Done
+# Info output
 echo ""
-echo "GLPI installation complete"
-echo "Access it at: http://$DOMAIN"
-echo "Follow the web setup to complete configuration"
+echo "GLPI has been installed under /var/www/html and configured"
+echo "Open http://$DOMAIN/install.php to begin the web-based installation"
+echo "Do not remove the /install directory until the setup is complete"
