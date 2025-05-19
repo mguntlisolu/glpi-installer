@@ -51,6 +51,6 @@ echo "Reloading Apache..."
 sudo systemctl reload apache2
 
 echo ""
-echo "✔ GLPI is now configured to run under http://localhost"
-echo "⚠️ Please ensure the install/ directory is removed"
-echo "✅ Setup complete. You can now log in to GLPI."
+echo "GLPI is now configured to run under http://localhost"
+echo "Please ensure the install/ directory is removed"
+echo "Setup complete. You can now log in to GLPI."
