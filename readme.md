@@ -17,4 +17,5 @@ This is a secure and production-ready Bash script that installs GLPI (version 10
 
 ## Usage
 
-Download and run the script with bash
+Installation: Download and run the install-glpi.sh script with wget and bash
+Removing: ownload and run the uninstall-glpi.sh script with wget and bash
