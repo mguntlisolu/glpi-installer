@@ -12,7 +12,7 @@ This is a secure and production-ready Bash script that installs GLPI (version 10
 - Moves the GLPI `files/` directory outside of the web root
 - Sets `GLPI_VAR_DIR` accordingly in `define.php`
 - Enables `session.cookie_httponly` for improved security
-- Fixes Apache warning by adding a global `ServerName`
+- Configures Apache by adding a global `ServerName`
 - Creates a virtual host for the given domain
 
 ## Usage
