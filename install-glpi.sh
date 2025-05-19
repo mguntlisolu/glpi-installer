@@ -1,28 +1,27 @@
 #!/bin/bash
 
-echo "GLPI Installer with PHP 8.3 (root directory setup and secure configuration)"
+echo "GLPI Installer with PHP 8.3 - Secure root path setup"
 
-# Prompt for DB credentials and domain
 read -p "Enter the MySQL username for GLPI: " DB_USER
 read -s -p "Enter the MySQL password for $DB_USER: " DB_PASS
 echo ""
-read -p "Enter the domain name (e.g. localhost or glpi.example.com): " DOMAIN
+read -p "Enter the domain name (for example: localhost or glpi.example.com): " DOMAIN
 
-# Update the system
+# System update
 sudo apt update && sudo apt upgrade -y
 
 # Add PHP 8.3 repository
 sudo add-apt-repository ppa:ondrej/php -y
 sudo apt update
 
-# Install Apache, MySQL, PHP and required extensions
+# Install Apache, MySQL, PHP and required modules
 sudo apt install -y apache2 mysql-server unzip wget \
 php8.3 php8.3-cli php8.3-common php8.3-mysql php8.3-curl php8.3-gd \
 php8.3-intl php8.3-xml php8.3-mbstring php8.3-zip php8.3-bz2 \
 php8.3-pspell php8.3-tidy php8.3-imap php8.3-xsl php8.3-ldap php8.3-imagick \
 php-apcu php-cas php-pear libapache2-mod-php8.3
 
-# Create MySQL database and user for GLPI
+# Create MySQL database and user
 sudo mysql <<EOF
 CREATE DATABASE glpidb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -30,32 +29,35 @@ GRANT ALL PRIVILEGES ON glpidb.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# Download and extract GLPI
-cd /tmp/
+# Clean web root
+sudo rm -rf /var/www/html/*
+
+# Download and extract GLPI into web root
+cd /tmp
 wget https://github.com/glpi-project/glpi/releases/download/10.0.14/glpi-10.0.14.tgz
 tar -xvzf glpi-10.0.14.tgz
-sudo mv glpi /var/www/html/
+sudo mv glpi/* /var/www/html/
 
-# Create secure data directory outside the web root
-sudo mkdir -p /var/lib/glpi-files
-sudo chown -R www-data:www-data /var/lib/glpi-files
+# Move data directory outside of web root
+sudo mkdir -p /var/lib/glpi-data
+sudo chown -R www-data:www-data /var/lib/glpi-data
 
-# Set GLPI_VAR_DIR in define.php
-sudo sed -i "s|define('GLPI_VAR_DIR'.*|define('GLPI_VAR_DIR', '/var/lib/glpi-files');|" /var/www/html/glpi/inc/define.php
+# Update GLPI_VAR_DIR in define.php
+sudo sed -i "s|define('GLPI_VAR_DIR'.*|define('GLPI_VAR_DIR', '/var/lib/glpi-data');|" /var/www/html/inc/define.php
 
 # Set correct permissions
-sudo chown -R www-data:www-data /var/www/html/glpi
-sudo find /var/www/html/glpi -type d -exec chmod 755 {} \;
-sudo find /var/www/html/glpi -type f -exec chmod 644 {} \;
+sudo chown -R www-data:www-data /var/www/html
+sudo find /var/www/html -type d -exec chmod 755 {} \;
+sudo find /var/www/html -type f -exec chmod 644 {} \;
 
-# Configure Apache VirtualHost for root access
+# Apache VirtualHost configuration pointing to /public
 sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 <VirtualHost *:80>
-    ServerAdmin admin@$DOMAIN
-    DocumentRoot /var/www/html/glpi/public
     ServerName $DOMAIN
+    ServerAdmin admin@$DOMAIN
+    DocumentRoot /var/www/html/public
 
-    <Directory /var/www/html/glpi/public>
+    <Directory /var/www/html/public>
         Options FollowSymLinks
         AllowOverride All
         Require all granted
@@ -66,22 +68,24 @@ sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
 </VirtualHost>
 EOF"
 
-# Set global ServerName to suppress Apache warning
+# Disable default site and enable GLPI site
+sudo a2dissite 000-default.conf
+sudo a2ensite glpi
+sudo a2enmod rewrite
+
+# Add global ServerName if missing
 if ! grep -q "^ServerName" /etc/apache2/apache2.conf; then
     echo "ServerName $DOMAIN" | sudo tee -a /etc/apache2/apache2.conf
 fi
 
-# Enable secure PHP sessions
+# Set PHP session hardening
 sudo sed -i "s/^;*session.cookie_httponly.*/session.cookie_httponly = On/" /etc/php/8.3/apache2/php.ini
 
-# Enable site and necessary modules
-sudo a2ensite glpi
-sudo a2enmod rewrite
+# Restart Apache
 sudo systemctl restart apache2
 
-# Final info
+# Done
 echo ""
-echo "GLPI has been installed and is available at:"
-echo "   http://$DOMAIN"
-echo ""
-echo "Open the web installer to complete setup."
+echo "GLPI installation complete"
+echo "Access it at: http://$DOMAIN"
+echo "Follow the web setup to complete configuration"
