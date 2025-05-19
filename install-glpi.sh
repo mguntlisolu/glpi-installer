@@ -81,7 +81,7 @@ sudo systemctl restart apache2
 
 # Final info
 echo ""
-echo "✅ GLPI has been installed and is available at:"
+echo "GLPI has been installed and is available at:"
 echo "   http://$DOMAIN"
 echo ""
-echo "➡️ Open the web installer to complete setup."
+echo "Open the web installer to complete setup."
