@@ -1,56 +1,80 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# install-glpi-final.sh
+# Post-install steps: move to /, set GLPI_VAR_DIR, configure Apache
 
-echo "Finalizing GLPI setup and switching to root path..."
+set -euo pipefail
 
-# 1. Option: install/ Verzeichnis löschen (nur nach manuellem Setup!)
-if [ -d /var/www/glpi/install ]; then
-    echo "Removing install/ directory..."
-    sudo rm -rf /var/www/glpi/install
+GLPI_DIR="/var/www/glpi"
+GLPI_DATA_DIR="/var/lib/glpi-data"
+APACHE_SITE_NAME="glpi.conf"
+APACHE_USER="www-data"
+APACHE_GROUP="www-data"
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Bitte als root oder mit sudo ausführen."
+  exit 1
 fi
 
-# 2. Optional: Datenverzeichnis auslagern
-if [ ! -d /var/lib/glpi-data ]; then
-    echo "Creating external GLPI data directory..."
-    sudo mkdir -p /var/lib/glpi-data
-    sudo chown -R www-data:www-data /var/lib/glpi-data
+echo "----------------------------------------"
+echo " GLPI Finalizer (/ -> ${GLPI_DIR}/public)"
+echo "----------------------------------------"
+
+if [[ ! -d "$GLPI_DIR" ]]; then
+  echo "FEHLER: GLPI-Verzeichnis $GLPI_DIR existiert nicht."
+  exit 1
 fi
 
-# 3. GLPI_VAR_DIR in define.php anpassen
-if grep -q "define('GLPI_VAR_DIR'" /var/www/glpi/inc/define.php; then
-    sudo sed -i "s|define('GLPI_VAR_DIR'.*|define('GLPI_VAR_DIR', '/var/lib/glpi-data');|" /var/www/glpi/inc/define.php
+# /install entfernen (sollte nach Web-Install nicht mehr gebraucht werden)
+if [[ -d "${GLPI_DIR}/install" ]]; then
+  echo "-> Entferne Installationsverzeichnis ${GLPI_DIR}/install"
+  rm -rf "${GLPI_DIR}/install"
 fi
 
-# 4. Apache-VHost für Root-Zugriff auf /var/www/glpi/public
-echo "Configuring Apache virtual host for GLPI under root path..."
+# Datenverzeichnis existiert schon? Sonst anlegen.
+mkdir -p "$GLPI_DATA_DIR"
+chown -R "$APACHE_USER:$APACHE_GROUP" "$GLPI_DATA_DIR"
 
-sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
+# GLPI_VAR_DIR anpassen: in config/define.php
+DEFINE_FILE="${GLPI_DIR}/config/define.php"
+if [[ -f "$DEFINE_FILE" ]]; then
+  echo "-> Setze GLPI_VAR_DIR in ${DEFINE_FILE} auf ${GLPI_DATA_DIR}"
+  # einfache Variante: falls Konstante existiert, ersetzen, sonst anhängen
+  if grep -q "GLPI_VAR_DIR" "$DEFINE_FILE"; then
+    sed -i "s#define('GLPI_VAR_DIR'.*#define('GLPI_VAR_DIR', '${GLPI_DATA_DIR}');#g" "$DEFINE_FILE"
+  else
+    echo "define('GLPI_VAR_DIR', '${GLPI_DATA_DIR}');" >>"$DEFINE_FILE"
+  fi
+else
+  echo "WARNUNG: ${DEFINE_FILE} nicht gefunden – bitte manuell prüfen."
+fi
+
+# Apache vHost auf /var/www/glpi/public umstellen
+echo "-> Konfiguriere Apache vHost für GLPI-Root /"
+
+cat >/etc/apache2/sites-available/${APACHE_SITE_NAME} <<EOF
 <VirtualHost *:80>
     ServerName localhost
-    DocumentRoot /var/www/glpi/public
 
-    <Directory /var/www/glpi/public>
+    DocumentRoot ${GLPI_DIR}/public
+
+    <Directory ${GLPI_DIR}/public>
         Require all granted
-        RewriteEngine On
-
-        # Pass Authorization header (required for API, CalDAV, etc.)
-        RewriteCond %{HTTP:Authorization} ^(.+)\$
-        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-
-        # Route all non-file requests to GLPI router
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteRule ^(.*)\$ index.php [QSA,L]
+        AllowOverride All
+        Options FollowSymLinks
     </Directory>
 
     ErrorLog \${APACHE_LOG_DIR}/glpi_error.log
     CustomLog \${APACHE_LOG_DIR}/glpi_access.log combined
 </VirtualHost>
-EOF"
+EOF
 
-# 5. Apache Reload
-echo "Reloading Apache..."
-sudo systemctl reload apache2
+a2enmod rewrite
+a2ensite "${APACHE_SITE_NAME}"
+systemctl reload apache2
 
-echo ""
-echo "GLPI is now configured to run under http://localhost"
-echo "Please ensure the install/ directory is removed"
-echo "Setup complete. You can now log in to GLPI."
+chown -R "$APACHE_USER:$APACHE_GROUP" "$GLPI_DIR"
+
+echo "----------------------------------------"
+echo "GLPI ist nun über http://<dein-server>/ erreichbar."
+echo "Datenverzeichnis: ${GLPI_DATA_DIR}"
+echo "----------------------------------------"
