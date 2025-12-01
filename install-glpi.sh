@@ -4,8 +4,6 @@
 
 set -euo pipefail
 
-# --- CONFIG -------------------------------------------------------------
-
 GLPI_VERSION="11.0.2"
 GLPI_ARCHIVE="glpi-${GLPI_VERSION}.tgz"
 GLPI_DOWNLOAD_URL="https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/${GLPI_ARCHIVE}"
