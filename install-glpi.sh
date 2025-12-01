@@ -1,77 +1,181 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# install-glpi.sh
+# Install GLPI 11 on Ubuntu with Apache + MariaDB
 
-echo "GLPI Installer (Phase 1 - Setup under /glpi path)"
+set -euo pipefail
 
-# Eingabe durch Benutzer
-read -p "Enter MySQL username for GLPI: " DB_USER
-read -s -p "Enter password for user $DB_USER: " DB_PASS
-echo ""
-read -p "Enter domain (e.g. localhost or inventory.example.com): " DOMAIN
+# --- CONFIG -------------------------------------------------------------
 
-# System vorbereiten
-sudo apt update && sudo apt upgrade -y
-sudo add-apt-repository ppa:ondrej/php -y
-sudo apt update
+GLPI_VERSION="11.0.2"
+GLPI_ARCHIVE="glpi-${GLPI_VERSION}.tgz"
+GLPI_DOWNLOAD_URL="https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/${GLPI_ARCHIVE}"
 
-# Apache, MySQL, PHP und Erweiterungen
-sudo apt install -y apache2 mysql-server unzip wget \
-php8.3 php8.3-cli php8.3-common php8.3-mysql php8.3-curl php8.3-gd \
-php8.3-intl php8.3-xml php8.3-mbstring php8.3-zip php8.3-bz2 \
-php8.3-pspell php8.3-tidy php8.3-imap php8.3-xsl php8.3-ldap \
-php8.3-imagick php-apcu php-cas php-pear libapache2-mod-php8.3
+GLPI_WEB_ROOT="/var/www"
+GLPI_DIR="${GLPI_WEB_ROOT}/glpi"
+GLPI_DATA_DIR="/var/lib/glpi-data"
 
-# Datenbank erstellen
-sudo mysql <<EOF
-CREATE DATABASE glpidb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
-GRANT ALL PRIVILEGES ON glpidb.* TO '$DB_USER'@'localhost';
+APACHE_SITE_NAME="glpi.conf"
+APACHE_USER="www-data"
+APACHE_GROUP="www-data"
+
+DB_HOST="localhost"
+DB_NAME="glpidb"
+DB_USER="glpiuser"
+DB_PASSWORD="ChangeMe123!"   # <- anpassen!
+
+MYSQL_ROOT_USER="root"
+MYSQL_ROOT_PWD_FILE="/root/.mysql_root_pwd"  # optional
+
+# -----------------------------------------------------------------------
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Bitte als root oder mit sudo ausführen."
+  exit 1
+fi
+
+echo "----------------------------------------"
+echo " GLPI ${GLPI_VERSION} Installer"
+echo "----------------------------------------"
+
+apt-get update
+
+echo "-> Installiere benötigte Pakete (Apache, MariaDB, PHP + Extensions)..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  apache2 \
+  mariadb-server \
+  php \
+  php-cli \
+  php-common \
+  php-curl \
+  php-gd \
+  php-intl \
+  php-mbstring \
+  php-mysql \
+  php-xml \
+  php-zip \
+  php-bcmath \
+  unzip \
+  wget
+
+# --- PHP-Version prüfen -------------------------------------------------
+
+PHP_VERSION_RAW="$(php -r 'echo PHP_VERSION;' || echo '0')"
+PHP_MAJOR="$(php -r 'echo PHP_MAJOR_VERSION;' || echo '0')"
+PHP_MINOR="$(php -r 'echo PHP_MINOR_VERSION;' || echo '0')"
+
+echo "Installierte PHP-Version: $PHP_VERSION_RAW"
+
+if (( PHP_MAJOR < 8 || (PHP_MAJOR == 8 && PHP_MINOR < 2) )); then
+  echo "FEHLER: GLPI 11 benötigt PHP >= 8.2. Aktuell: $PHP_VERSION_RAW"
+  echo "Bitte PHP-Version aktualisieren (z.B. Ubuntu 24.04 oder PHP-Repo verwenden) und Skript erneut starten."
+  exit 1
+fi
+
+# --- MariaDB absichern (optional minimal) -------------------------------
+
+echo "-> MariaDB Dienst starten (falls nicht aktiv)..."
+systemctl enable mariadb --now
+
+# Root-Passwort optional hinterlegen (wenn du eine non-interactive Variante willst)
+if [[ ! -f "$MYSQL_ROOT_PWD_FILE" ]]; then
+  echo "Hinweis: Datei $MYSQL_ROOT_PWD_FILE enthält kein Root-Passwort."
+  echo "Du kannst sie nachträglich erstellen, um DB-Aufgaben zu automatisieren."
+fi
+
+# --- Datenbank + User anlegen ------------------------------------------
+
+echo "-> Erstelle Datenbank und User (falls noch nicht vorhanden)..."
+
+MYSQL_CMD=(mysql -h "$DB_HOST" -u "$MYSQL_ROOT_USER")
+
+if [[ -f "$MYSQL_ROOT_PWD_FILE" ]]; then
+  MYSQL_ROOT_PWD="$(<"$MYSQL_ROOT_PWD_FILE")"
+  if [[ -n "$MYSQL_ROOT_PWD" ]]; then
+    MYSQL_CMD+=("-p$MYSQL_ROOT_PWD")
+  fi
+fi
+
+"${MYSQL_CMD[@]}" <<SQL
+CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
-EOF
+SQL
 
-# GLPI herunterladen und entpacken
-cd /tmp
-wget https://github.com/glpi-project/glpi/releases/download/10.0.14/glpi-10.0.14.tgz
-tar -xvzf glpi-10.0.14.tgz
-sudo mv glpi /var/www/glpi
+# --- GLPI herunterladen & entpacken ------------------------------------
 
-# Rechte setzen
-sudo chown -R www-data:www-data /var/www/glpi
-sudo find /var/www/glpi -type d -exec chmod 755 {} \;
-sudo find /var/www/glpi -type f -exec chmod 644 {} \;
+echo "-> Lade GLPI ${GLPI_VERSION} herunter..."
+mkdir -p "$GLPI_WEB_ROOT"
+cd "$GLPI_WEB_ROOT"
 
-# Apache Konfiguration für Setup über /glpi (Alias)
-sudo bash -c "cat > /etc/apache2/sites-available/glpi.conf <<EOF
+if [[ -d "$GLPI_DIR" ]]; then
+  echo "WARNUNG: Verzeichnis $GLPI_DIR existiert bereits."
+  read -r -p "Soll es überschrieben werden? [y/N] " OVERWRITE
+  case "$OVERWRITE" in
+    y|Y|yes|YES)
+      rm -rf "$GLPI_DIR"
+      ;;
+    *)
+      echo "Abgebrochen."
+      exit 1
+      ;;
+  esac
+fi
+
+wget -O "$GLPI_ARCHIVE" "$GLPI_DOWNLOAD_URL"
+tar xzf "$GLPI_ARCHIVE"
+rm "$GLPI_ARCHIVE"
+
+# entpackt in ./glpi
+chown -R "$APACHE_USER:$APACHE_GROUP" "$GLPI_DIR"
+
+# --- externes Datenverzeichnis vorab anlegen ---------------------------
+
+mkdir -p "$GLPI_DATA_DIR"
+chown -R "$APACHE_USER:$APACHE_GROUP" "$GLPI_DATA_DIR"
+
+# --- Apache für /glpi konfigurieren ------------------------------------
+
+echo "-> Konfiguriere Apache vHost /glpi ..."
+
+cat >/etc/apache2/sites-available/${APACHE_SITE_NAME} <<EOF
 <VirtualHost *:80>
-    ServerName $DOMAIN
-    DocumentRoot /var/www
+    ServerName localhost
 
-    Alias /glpi /var/www/glpi
-
-    <Directory /var/www/glpi>
-        Options FollowSymLinks
+    DocumentRoot ${GLPI_DIR}
+    <Directory ${GLPI_DIR}>
         AllowOverride All
         Require all granted
     </Directory>
 
+    Alias /glpi ${GLPI_DIR}
+
     ErrorLog \${APACHE_LOG_DIR}/glpi_error.log
     CustomLog \${APACHE_LOG_DIR}/glpi_access.log combined
 </VirtualHost>
-EOF"
+EOF
 
-# Apache aktivieren
-sudo a2dissite 000-default.conf
-sudo a2ensite glpi
-sudo a2enmod rewrite
+a2enmod rewrite
+a2ensite "${APACHE_SITE_NAME}"
+systemctl reload apache2
 
-# ServerName optional ergänzen
-if ! grep -q "^ServerName" /etc/apache2/apache2.conf; then
-    echo "ServerName $DOMAIN" | sudo tee -a /etc/apache2/apache2.conf
-fi
+# --- Info für den Benutzer ---------------------------------------------
 
-# Apache neu starten
-sudo systemctl reload apache2
+cat <<INFO
 
-echo ""
-echo "GLPI installed under /var/www/glpi"
-echo "Open http://$DOMAIN/glpi/install/install.php in your browser to start the web-based setup"
-echo "After completing the installation, run 'glpi-finalize.sh' to move GLPI to root path"
+----------------------------------------
+GLPI ${GLPI_VERSION} wurde vorbereitet.
+
+1. Öffne deinen Browser:
+   http://<dein-server>/glpi/install/install.php
+
+2. Verwende folgende Datenbank-Zugangsdaten:
+   Host:     ${DB_HOST}
+   DB-Name:  ${DB_NAME}
+   User:     ${DB_USER}
+   Passwort: ${DB_PASSWORD}
+
+3. Nach Abschluss der Web-Installation:
+   -> 'install-glpi-final.sh' ausführen (siehe glpi-final Schritt).
+----------------------------------------
+INFO
